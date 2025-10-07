@@ -43,7 +43,12 @@ function local_prometheus_get_userstatistics(int $window): array {
         get_string('metric:onlineusers', 'local_prometheus')
     );
 
-    $currentlyonline = $DB->count_records_select('user', 'lastaccess > ?', [ $window ]);
+    $currentlyonline = $DB->count_records_select(
+        'user',
+        'lastaccess > UNIX_TIMESTAMP(NOW() - INTERVAL ? SECOND)',
+        [ $window ]
+    );
+    
     $onlinemetric->add_value(
         new metric_value([], $currentlyonline)
     );
