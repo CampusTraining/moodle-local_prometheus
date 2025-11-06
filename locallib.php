@@ -55,31 +55,15 @@ function local_prometheus_get_userstatistics(int $window): array {
 
     // Grab data about currently active users.
     $activedata = $DB->get_records_sql("
-        SELECT	MAX(usr.id),
-                auth,
-                (
-                    SELECT	COUNT('x')
-                    FROM	{user}
-                    WHERE	auth = usr.auth
-                        AND	deleted = 0
-                        AND	suspended = 0
-                ) AS active,
-                (
-                    SELECT	COUNT('x')
-                    FROM	{user}
-                    WHERE	auth = usr.auth
-                        AND	deleted = 1
-                        AND	suspended = 0
-                ) AS deleted,
-                (
-                    SELECT	COUNT('x')
-                    FROM	{user}
-                    WHERE	auth = usr.auth
-                        AND	deleted = 0
-                        AND	suspended = 1
-                ) AS suspended
-        FROM	{user} usr
-        GROUP BY auth");
+        SELECT
+            MAX(id) AS max_id,
+            auth,
+            SUM(CASE WHEN deleted = 0 AND suspended = 0 THEN 1 ELSE 0 END) AS active,
+            SUM(CASE WHEN deleted = 1 AND suspended = 0 THEN 1 ELSE 0 END) AS deleted,
+            SUM(CASE WHEN deleted = 0 AND suspended = 1 THEN 1 ELSE 0 END) AS suspended
+        FROM {user}
+        GROUP BY auth
+    ");
 
     $activemetric = new metric(
         'moodle_users_active',
@@ -119,25 +103,15 @@ function local_prometheus_get_coursestatistics(int $window): array {
     global $DB;
 
     $coursedata = $DB->get_records_sql("
-SELECT	MAX(course.id),
-        format,
-		theme,
-		(
-			SELECT	COUNT('x')
-			FROM	{course}
-			WHERE	format = course.format
-				AND	theme = course.theme
-				AND visible = 0
-		) AS hidden,
-		(
-			SELECT	COUNT('x')
-			FROM	{course}
-			WHERE	format = course.format
-                AND	theme = course.theme
-                AND visible = 1
-		) AS visible
-FROM	{course} course
-GROUP BY format, theme");
+        SELECT
+            MAX(id) AS max_id,
+            format,
+            theme,
+            SUM(CASE WHEN visible = 0 THEN 1 ELSE 0 END) AS hidden,
+            SUM(CASE WHEN visible = 1 THEN 1 ELSE 0 END) AS visible
+        FROM {course}
+        GROUP BY format, theme
+    ");
 
     $visiblemetric = new metric(
         'moodle_courses_visible',
@@ -176,38 +150,32 @@ function local_prometheus_get_enrolstatistics(int $window): array {
     global $DB;
 
     $data = $DB->get_records_sql("
-SELECT	max(id),
-        enrol,
-    (
-        SELECT	COUNT('x')
-        FROM	{enrol} enrol
-        WHERE	enrol.enrol = outenrol.enrol
-            AND	status = 1
-    ) AS disabled,
-    (
-        SELECT	COUNT('x')
-        FROM	{enrol} enrol
-        WHERE	enrol.enrol = outenrol.enrol
-            AND	status = 0
-    ) AS enabled,
-    (
-        SELECT	COUNT('x')
-        FROM	{user_enrolments} user_enrol
-            INNER JOIN {enrol} enrol
-                ON	enrol.id = user_enrol.enrolid
-        WHERE	enrol.enrol = outenrol.enrol
-            AND	user_enrol.status = 0
-    ) AS active_enrolments,
-    (
-        SELECT	COUNT('x')
-        FROM	{user_enrolments} user_enrol
-            INNER JOIN {enrol} enrol
-                ON	enrol.id = user_enrol.enrolid
-        WHERE	enrol.enrol = outenrol.enrol
-            AND	user_enrol.status = 1
-    ) AS suspended_enrolments
-FROM	{enrol} outenrol
-GROUP BY enrol");
+        SELECT
+            e_stats.max_id,
+            e_stats.enrol,
+            e_stats.disabled,
+            e_stats.enabled,
+            COALESCE(ue_stats.active_enrolments, 0) AS active_enrolments,
+            COALESCE(ue_stats.suspended_enrolments, 0) AS suspended_enrolments
+        FROM (
+            SELECT
+                enrol,
+                MAX(id) AS max_id,
+                SUM(status = 1) AS disabled,
+                SUM(status = 0) AS enabled
+            FROM {enrol}
+            GROUP BY enrol
+        ) AS e_stats
+        LEFT JOIN (
+            SELECT
+                e.enrol,
+                SUM(ue.status = 0) AS active_enrolments,
+                SUM(ue.status = 1) AS suspended_enrolments
+            FROM {enrol} e
+            JOIN {user_enrolments} ue ON ue.enrolid = e.id
+            GROUP BY e.enrol
+        ) AS ue_stats USING (enrol)
+    ");
 
     $enabledmetric = new metric(
         'moodle_enrolments_enabled',
@@ -253,24 +221,15 @@ function local_prometheus_get_modulestatistics(int $window): array {
     global $DB;
 
     $data = $DB->get_records_sql("
-SELECT	id,
-        name,
-        (
-            SELECT	COUNT('x')
-            FROM	{course_modules} course_module
-            WHERE	course_module.module = module.id
-                AND	deletioninprogress = 0
-                AND course_module.visible = 1
-        ) AS visible,
-        (
-            SELECT	COUNT('x')
-            FROM	{course_modules} course_module
-            WHERE	course_module.module = module.id
-                AND	deletioninprogress = 0
-                AND course_module.visible = 0
-        ) AS hidden
-FROM	{modules} module
-GROUP BY module.name, module.id");
+        SELECT
+            m.id,
+            m.name,
+            SUM(CASE WHEN cm.deletioninprogress = 0 AND cm.visible = 1 THEN 1 ELSE 0 END) AS visible,
+            SUM(CASE WHEN cm.deletioninprogress = 0 AND cm.visible = 0 THEN 1 ELSE 0 END) AS hidden
+        FROM {modules} m
+        LEFT JOIN {course_modules} cm ON cm.module = m.id
+        GROUP BY m.id, m.name
+    ");
 
     $visiblemetric = new metric(
         'moodle_modules_visible',
@@ -304,17 +263,18 @@ function local_prometheus_get_taskstatistics(int $window): array {
     global $DB;
 
     $tasks = $DB->get_records_sql("
-SELECT	MAX(id),
-        type,
-        component,
-        classname,
-        hostname,
-        COUNT('x') AS runs,
-        SUM(result) AS failures
-FROM	{task_log}
-WHERE   timeend > ?
-GROUP BY component, classname, hostname, type",
-        [ $window ]);
+        SELECT
+            MAX(id) AS max_id,
+            type,
+            component,
+            classname,
+            hostname,
+            COUNT(*) AS runs,
+            SUM(result) AS failures
+        FROM {task_log}
+        WHERE timeend > ?
+        GROUP BY component, classname, hostname, type
+    ", [ $window ]);
 
     $runmetric = new metric(
         'moodle_task_runs',
