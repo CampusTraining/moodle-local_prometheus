@@ -27,6 +27,117 @@ use local_prometheus\metric;
 use local_prometheus\metric_value;
 
 /**
+ * Get online users broken down by role, respecting configured priority.
+ *
+ * @param int $window Time window in seconds
+ * @return array Associative array [roleshortname => count]
+ * @throws dml_exception
+ */
+function local_prometheus_get_online_users_by_role(int $window): array {
+    global $DB;
+
+    $config = get_config('local_prometheus');
+    $cachettl = isset($config->onlinecachettl) ? (int)$config->onlinecachettl : 30;
+
+    // Build cache key from window and config.
+    $rolescsv = isset($config->onlineroles) ? $config->onlineroles : 'editingteacher,teacher,student';
+    $contextscsv = isset($config->onlinecontexts) ? implode(',', (array)$config->onlinecontexts) : CONTEXT_SYSTEM . ',' . CONTEXT_COURSE;
+    $cachekey = md5($window . '|' . $rolescsv . '|' . $contextscsv);
+
+    $cache = cache::make('local_prometheus', 'usersonlinebyrole');
+
+    // Check cache if TTL > 0.
+    if ($cachettl > 0) {
+        $cached = $cache->get($cachekey);
+        if ($cached !== false && isset($cached['time']) && (time() - $cached['time']) < $cachettl) {
+            return $cached['data'];
+        }
+    }
+
+    // Compute from DB.
+    $roles = array_filter(array_map('trim', explode(',', $rolescsv)));
+    $contexts = array_filter(array_map('intval', explode(',', $contextscsv)));
+
+    if (empty($roles) || empty($contexts)) {
+        return [];
+    }
+
+    // Get online user IDs.
+    $onlineuserids = $DB->get_fieldset_select(
+        'user',
+        'id',
+        'lastaccess > UNIX_TIMESTAMP(NOW() - INTERVAL ? SECOND)',
+        [$window]
+    );
+
+    if (empty($onlineuserids)) {
+        return [];
+    }
+
+    // Fetch role shortnames keyed by ID for quick lookup.
+    list($inrolesql, $inroleparams) = $DB->get_in_or_equal($roles, SQL_PARAMS_NAMED);
+    $rolesbyid = $DB->get_records_sql(
+        "SELECT id, shortname FROM {role} WHERE shortname $inrolesql",
+        $inroleparams
+    );
+    $roleshortnames = array_column($rolesbyid, 'shortname', 'id');
+
+    // Build context filter.
+    list($incontextsql, $incontextparams) = $DB->get_in_or_equal($contexts, SQL_PARAMS_NAMED);
+
+    // Fetch role assignments for online users in selected contexts.
+    list($inusersql, $inuserparams) = $DB->get_in_or_equal($onlineuserids, SQL_PARAMS_NAMED);
+    $params = array_merge($inuserparams, $incontextparams);
+
+    $sql = "SELECT ra.userid, ra.roleid, ctx.contextlevel
+              FROM {role_assignments} ra
+              JOIN {context} ctx ON ctx.id = ra.contextid
+             WHERE ra.userid $inusersql
+               AND ctx.contextlevel $incontextsql
+          ORDER BY ra.userid";
+
+    $assignments = $DB->get_records_sql($sql, $params);
+
+    // Assign each user to the first matching role by priority.
+    $userroles = [];
+    foreach ($assignments as $assignment) {
+        $userid = $assignment->userid;
+        if (isset($userroles[$userid])) {
+            continue; // Already assigned.
+        }
+        $roleid = $assignment->roleid;
+        if (isset($roleshortnames[$roleid])) {
+            $shortname = $roleshortnames[$roleid];
+            // Check if this role is in the priority list.
+            $priorityindex = array_search($shortname, $roles, true);
+            if ($priorityindex !== false) {
+                if (!isset($userroles[$userid])) {
+                    $userroles[$userid] = ['shortname' => $shortname, 'priority' => $priorityindex];
+                } else if ($priorityindex < $userroles[$userid]['priority']) {
+                    $userroles[$userid] = ['shortname' => $shortname, 'priority' => $priorityindex];
+                }
+            }
+        }
+    }
+
+    // Count by role.
+    $counts = array_fill_keys($roles, 0);
+    foreach ($userroles as $userid => $roledata) {
+        $counts[$roledata['shortname']]++;
+    }
+
+    // Remove zero counts.
+    $counts = array_filter($counts);
+
+    // Store in cache.
+    if ($cachettl > 0) {
+        $cache->set($cachekey, ['time' => time(), 'data' => $counts]);
+    }
+
+    return $counts;
+}
+
+/**
  * Fetch user statistics metric
  *
  * @param int $window How far back to look for 'current' data
@@ -49,9 +160,18 @@ function local_prometheus_get_userstatistics(int $window): array {
         [ $window ]
     );
     
+    // Add total count without labels (backward compatibility).
     $onlinemetric->add_value(
         new metric_value([], $currentlyonline)
     );
+
+    // Add per-role breakdown.
+    $rolecounts = local_prometheus_get_online_users_by_role($window);
+    foreach ($rolecounts as $roleshortname => $count) {
+        $onlinemetric->add_value(
+            new metric_value(['role' => $roleshortname], $count)
+        );
+    }
 
     // Grab data about currently active users.
     $activedata = $DB->get_records_sql("

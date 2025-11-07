@@ -58,6 +58,22 @@ $string['activitystatistics:description'] = 'Include the number of recent entrie
 $string['extratags'] = 'Extra tags for each metric';
 $string['extratags:description'] = 'Include extra tags to be included in each metric. Each key=value pair should be on a separate line. Keys and values should be separated by an \'=\' equals.';
 
+$string['heading:onlineusers'] = 'Online users by role';
+$string['heading:onlineusers:information'] = 'Configure how online users are counted and broken down by role';
+
+$string['onlinewindow'] = 'Default online window (seconds)';
+$string['onlinewindow:description'] = 'Default time window (in seconds) for considering a user online. Can be overridden by the <var>timeframe</var> URL parameter.';
+$string['onlineroles'] = 'Roles to track';
+$string['onlineroles:description'] = 'Comma-separated list of role shortnames to track for online users. Order defines priority: if a user has multiple roles, they will be counted under the first matching role in this list.';
+$string['onlinecontexts'] = 'Contexts to check';
+$string['onlinecontexts:description'] = 'Which contexts to check when assigning users to roles. System context typically includes admins, course context includes teachers and students.';
+$string['onlinecachettl'] = 'Cache TTL (seconds)';
+$string['onlinecachettl:description'] = 'How long to cache online user counts by role (in seconds) to reduce database load. Set to 0 to disable caching.';
+
+$string['context:system'] = 'System';
+$string['context:coursecat'] = 'Category';
+$string['context:course'] = 'Course';
+
 $string['metric:onlineusers'] = 'Number of currently online users';
 $string['metric:activeusers'] = 'Number of current active users (not deleted or suspended)';
 $string['metric:deletedusers'] = 'Number of deleted users';
