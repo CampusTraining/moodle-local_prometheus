@@ -2,6 +2,18 @@
 A local plugin that presents an endpoint for Prometheus metric gathering.
 Can be used either in Prometheus or as an InfluxDB v2 scraper
 
+## Features
+- **Online users by role**: The `moodle_users_online` metric now includes optional per-role breakdowns using a `role` label (e.g., `role="student"`, `role="teacher"`). The total count (without labels) is still exposed for backward compatibility.
+- **Configurable**: Default online window, role priority list, context filtering (system/course/category), and cache TTL are all configurable via plugin settings.
+- **Lightweight caching**: Role-based counts are cached using Moodle's cache API to minimize database load on high-traffic sites.
+
+## Configuration
+Navigate to **Site administration > Plugins > Local plugins > Prometheus reporting endpoint** to configure:
+- **Default online window**: Time window (seconds) to consider a user online. Can be overridden by the `timeframe` URL parameter.
+- **Roles to track**: Comma-separated list of role shortnames (e.g., `editingteacher,teacher,student`). Order defines priority if a user has multiple roles.
+- **Contexts to check**: System, category, and/or course contexts to search for role assignments.
+- **Cache TTL**: How long (seconds) to cache online-by-role counts. Set to 0 to disable caching.
+
 ## Developing
 Plugins can add their own metrics to the output by adding their own `plugin_name_prometheus_get_metrics(int $window)` function
 to lib.php. This function **must** return either one or more `\local_prometheus\metric` objects, or an empty array.

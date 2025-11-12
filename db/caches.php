@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Prometheus reporting endpoint for Moodle
+ * Cache definitions for local_prometheus
  *
  * @package     local_prometheus
  * @copyright   2023 University of Essex
@@ -25,7 +25,13 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2025110700;
-$plugin->requires  = 2019051100;
-$plugin->component = 'local_prometheus';
-$plugin->release   = 'v1.2.0';
+$definitions = [
+    'usersonlinebyrole' => [
+        'mode' => cache_store::MODE_APPLICATION,
+        'simplekeys' => true,
+        'simpledata' => false,
+        'staticacceleration' => true,
+        'staticaccelerationsize' => 1,
+    ],
+];
+

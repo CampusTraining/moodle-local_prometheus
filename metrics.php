@@ -38,7 +38,8 @@ $token = $tokenauthenabled
     ? optional_param('token', '', PARAM_BASE64)
     : required_param('token', PARAM_BASE64);
 
-$timeframe = optional_param('timeframe', 60 * 5, PARAM_INT);
+$defaultwindow = get_config('local_prometheus', 'onlinewindow') ?: 300;
+$timeframe = optional_param('timeframe', $defaultwindow, PARAM_INT);
 
 $cutoff = time() - $timeframe;
 

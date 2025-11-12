@@ -96,5 +96,44 @@ if ($hassiteconfig) {
         ));
     }
 
+    // Online users by role settings.
+    $settings->add(new admin_setting_heading('local_prometheus_onlineusers',
+        get_string('heading:onlineusers', 'local_prometheus'),
+        get_string('heading:onlineusers:information', 'local_prometheus')
+    ));
+
+    $settings->add(new admin_setting_configtext('local_prometheus/onlinewindow',
+        get_string('onlinewindow', 'local_prometheus'),
+        get_string('onlinewindow:description', 'local_prometheus'),
+        300,
+        PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext('local_prometheus/onlineroles',
+        get_string('onlineroles', 'local_prometheus'),
+        get_string('onlineroles:description', 'local_prometheus'),
+        'editingteacher,teacher,student',
+        PARAM_TEXT
+    ));
+
+    $contextoptions = [
+        CONTEXT_SYSTEM => get_string('context:system', 'local_prometheus'),
+        CONTEXT_COURSECAT => get_string('context:coursecat', 'local_prometheus'),
+        CONTEXT_COURSE => get_string('context:course', 'local_prometheus')
+    ];
+    $settings->add(new admin_setting_configmultiselect('local_prometheus/onlinecontexts',
+        get_string('onlinecontexts', 'local_prometheus'),
+        get_string('onlinecontexts:description', 'local_prometheus'),
+        [CONTEXT_SYSTEM, CONTEXT_COURSE],
+        $contextoptions
+    ));
+
+    $settings->add(new admin_setting_configtext('local_prometheus/onlinecachettl',
+        get_string('onlinecachettl', 'local_prometheus'),
+        get_string('onlinecachettl:description', 'local_prometheus'),
+        30,
+        PARAM_INT
+    ));
+
     $ADMIN->add('localplugins', $settings);
 }
