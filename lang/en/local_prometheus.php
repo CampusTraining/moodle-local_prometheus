@@ -89,3 +89,5 @@ $string['metric:moduleshidden'] = 'Number of activity modules hidden from studen
 $string['metric:taskruns'] = 'Number of tasks that completed successfully';
 $string['metric:taskfailures'] = 'Number of failed tasks';
 $string['metric:logitems'] = 'Number of log items';
+$string['brandsites'] = 'Sites per brand';
+$string['brandsites:description'] = 'For a Moodle that serves several brands. One line per brand: <code>CATEGORY_IDNUMBER = Site name</code>, where the category is a top-level course category. When set, the user metrics (online, active, deleted, suspended) are reported once per brand with that name in the <code>site</code> label, counting the users enrolled in (or accessing) courses under that category, and no site-wide user series is reported, so aggregated dashboards do not count anyone twice. Leave empty for the usual site-wide metrics.';

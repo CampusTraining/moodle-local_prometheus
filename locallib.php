@@ -147,6 +147,11 @@ function local_prometheus_get_online_users_by_role(int $window): array {
 function local_prometheus_get_userstatistics(int $window): array {
     global $DB;
 
+    $brands = local_prometheus_parse_brandsites((string) get_config('local_prometheus', 'brandsites'));
+    if ($brands) {
+        return local_prometheus_get_brand_userstatistics($window, $brands);
+    }
+
     // Grab data about currently online users (within the last window period).
     $onlinemetric = new metric(
         'moodle_users_online',
@@ -421,3 +426,154 @@ function local_prometheus_get_taskstatistics(int $window): array {
 
     return [ $runmetric, $failuremetric ];
 }
+
+/**
+ * Parse the brandsites setting.
+ *
+ * @param string $raw One "CATEGORY_IDNUMBER = Site name" per line
+ * @return array<string, string> category idnumber => site name
+ */
+function local_prometheus_parse_brandsites(string $raw): array {
+    $brands = [];
+    foreach (preg_split('/\R/', $raw) as $line) {
+        if (strpos($line, '=') === false) {
+            continue;
+        }
+        [$idnumber, $site] = array_map('trim', explode('=', $line, 2));
+        if ($idnumber !== '' && $site !== '') {
+            $brands[$idnumber] = $site;
+        }
+    }
+    return $brands;
+}
+
+/**
+ * Course ids under each brand's top-level category.
+ *
+ * @param array<string, string> $brands category idnumber => site name
+ * @return array<string, int[]> site name => course ids (brands without courses included, empty)
+ */
+function local_prometheus_get_brand_courses(array $brands): array {
+    global $DB;
+
+    $result = array_fill_keys(array_values($brands), []);
+
+    [$insql, $params] = $DB->get_in_or_equal(array_keys($brands), SQL_PARAMS_NAMED);
+    $roots = $DB->get_records_select_menu('course_categories', "depth = 1 AND idnumber $insql", $params, '', 'id, idnumber');
+    if (!$roots) {
+        return $result;
+    }
+
+    $courses = $DB->get_records_sql(
+        'SELECT c.id, cc.path FROM {course} c JOIN {course_categories} cc ON cc.id = c.category'
+    );
+    foreach ($courses as $course) {
+        $rootid = (int) explode('/', $course->path)[1];
+        if (isset($roots[$rootid])) {
+            $result[$brands[$roots[$rootid]]][] = (int) $course->id;
+        }
+    }
+    return $result;
+}
+
+/**
+ * User metrics split by brand, for a Moodle serving several brands.
+ *
+ * A user counts as online for a brand when they accessed one of its courses
+ * within the window (user_lastaccess), and as active/deleted/suspended for every
+ * brand they are enrolled in. Every value carries its own site label, which
+ * overrides the shared one; no site-wide user series is emitted.
+ *
+ * @param int $window Seconds to consider a user online
+ * @param array<string, string> $brands category idnumber => site name
+ * @return metric[]
+ */
+function local_prometheus_get_brand_userstatistics(int $window, array $brands): array {
+    global $DB;
+
+    $config = get_config('local_prometheus');
+    $roles = array_values(array_filter(array_map('trim',
+        explode(',', $config->onlineroles ?? 'editingteacher,teacher,student'))));
+    $cutoff = time() - $window;
+
+    $onlinemetric = new metric('moodle_users_online', metric::TYPE_GAUGE,
+        get_string('metric:onlineusers', 'local_prometheus'));
+    $activemetric = new metric('moodle_users_active', metric::TYPE_GAUGE,
+        get_string('metric:activeusers', 'local_prometheus'));
+    $deletedmetric = new metric('moodle_users_deleted', metric::TYPE_GAUGE,
+        get_string('metric:deletedusers', 'local_prometheus'));
+    $suspendedmetric = new metric('moodle_users_suspended', metric::TYPE_GAUGE,
+        get_string('metric:suspendedusers', 'local_prometheus'));
+
+    foreach (local_prometheus_get_brand_courses($brands) as $site => $courseids) {
+        $rolecounts = array_fill_keys($roles, 0);
+        $online = [];
+        $activedata = [];
+
+        if ($courseids) {
+            [$incourses, $params] = $DB->get_in_or_equal($courseids, SQL_PARAMS_NAMED, 'c');
+
+            $online = $DB->get_fieldset_sql(
+                "SELECT DISTINCT ula.userid
+                   FROM {user_lastaccess} ula
+                   JOIN {user} u ON u.id = ula.userid AND u.deleted = 0
+                  WHERE ula.courseid $incourses AND ula.timeaccess > :cutoff",
+                $params + ['cutoff' => $cutoff]
+            );
+
+            if ($online && $roles) {
+                [$inusers, $uparams] = $DB->get_in_or_equal($online, SQL_PARAMS_NAMED, 'u');
+                [$inroles, $rparams] = $DB->get_in_or_equal($roles, SQL_PARAMS_NAMED, 'r');
+                $assignments = $DB->get_recordset_sql(
+                    "SELECT ra.id, ra.userid, r.shortname
+                       FROM {role_assignments} ra
+                       JOIN {role} r ON r.id = ra.roleid
+                       JOIN {context} ctx ON ctx.id = ra.contextid AND ctx.contextlevel = :courselevel
+                      WHERE ra.userid $inusers AND r.shortname $inroles AND ctx.instanceid $incourses",
+                    $uparams + $rparams + $params + ['courselevel' => CONTEXT_COURSE]
+                );
+                // Each user counts once, under the first configured role they hold in the brand.
+                $priority = array_flip($roles);
+                $userrole = [];
+                foreach ($assignments as $a) {
+                    if (!isset($userrole[$a->userid]) || $priority[$a->shortname] < $priority[$userrole[$a->userid]]) {
+                        $userrole[$a->userid] = $a->shortname;
+                    }
+                }
+                $assignments->close();
+                foreach ($userrole as $shortname) {
+                    $rolecounts[$shortname]++;
+                }
+            }
+
+            $activedata = $DB->get_records_sql(
+                "SELECT u.auth,
+                        SUM(CASE WHEN u.deleted = 0 AND u.suspended = 0 THEN 1 ELSE 0 END) AS active,
+                        SUM(CASE WHEN u.deleted = 1 AND u.suspended = 0 THEN 1 ELSE 0 END) AS deleted,
+                        SUM(CASE WHEN u.deleted = 0 AND u.suspended = 1 THEN 1 ELSE 0 END) AS suspended
+                   FROM {user} u
+                  WHERE u.id IN (
+                        SELECT ue.userid
+                          FROM {user_enrolments} ue
+                          JOIN {enrol} e ON e.id = ue.enrolid
+                         WHERE e.courseid $incourses)
+               GROUP BY u.auth",
+                $params
+            );
+        }
+
+        $onlinemetric->add_value(new metric_value(['site' => $site], count($online)));
+        foreach ($rolecounts as $shortname => $count) {
+            $onlinemetric->add_value(new metric_value(['site' => $site, 'role' => $shortname], $count));
+        }
+        foreach ($activedata as $item) {
+            $labels = ['site' => $site, 'auth' => $item->auth];
+            $activemetric->add_value(new metric_value($labels, $item->active));
+            $deletedmetric->add_value(new metric_value($labels, $item->deleted));
+            $suspendedmetric->add_value(new metric_value($labels, $item->suspended));
+        }
+    }
+
+    return [$onlinemetric, $activemetric, $deletedmetric, $suspendedmetric];
+}
+

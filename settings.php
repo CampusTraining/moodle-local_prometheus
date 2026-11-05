@@ -135,5 +135,12 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    // Varias marcas servidas desde una sola Moodle: una serie de usuarios por marca.
+    $settings->add(new admin_setting_configtextarea('local_prometheus/brandsites',
+        get_string('brandsites', 'local_prometheus'),
+        get_string('brandsites:description', 'local_prometheus'),
+        ''
+    ));
+
     $ADMIN->add('localplugins', $settings);
 }
